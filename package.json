@@ -11,10 +11,11 @@
   },
   "dependencies": {
     "@humeai/voice-react": "^0.1.15",
-    "hume": "^0.8.10",
     "@radix-ui/react-slot": "^1.0.2",
     "@radix-ui/react-switch": "^1.0.3",
     "@radix-ui/react-toggle": "^1.0.3",
+    "@supabase/ssr": "^0.5.2",
+    "@supabase/supabase-js": "^2.49.1",
     "@types/react-virtualized": "^9.21.30",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
