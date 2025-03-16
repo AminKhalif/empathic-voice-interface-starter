@@ -1412,6 +1412,15 @@ function VoiceFlyerGameContent() {
             <div className="text-lg font-bold">Best: {bestScore}</div>
           </div>
           
+          <div className="flex justify-between mt-4">
+            <Link href="/progress" className="text-blue-500 hover:text-blue-700">
+              View Progress
+            </Link>
+            <Link href="/voice-flyer/scores" className="text-blue-500 hover:text-blue-700">
+              View Leaderboard
+            </Link>
+          </div>
+          
           {/* Volume level */}
           <div className="mb-4">
             <h3 className="font-medium mb-1">Voice Volume:</h3>
