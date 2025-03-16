@@ -6,9 +6,12 @@ import { Button } from "./ui/button";
 import { Moon, Sun } from "lucide-react";
 import Github from "./logos/GitHub";
 import pkg from '@/package.json';
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 export const Nav = () => {
   const [isDarkMode, setIsDarkMode] = useState(false);
+  const pathname = usePathname();
 
   useLayoutEffect(() => {
     const el = document.documentElement;
@@ -33,8 +36,11 @@ export const Nav = () => {
       }
     >
       <div>
-        <HumeLogo className={"h-5 w-auto"} />
+        <Link href="/">
+          <HumeLogo className={"h-5 w-auto"} />
+        </Link>
       </div>
+      
       <div className={"ml-auto flex items-center gap-1"}>
         <Button
           onClick={() => {
