@@ -4,7 +4,33 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useVoice, VoiceProvider } from '@humeai/voice-react';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
-import { createBrowserClient } from '@/lib/supabase';
+import { createClient as createBrowserClient } from '@/lib/supabase/browser';
+
+// Define interfaces for game objects
+interface Obstacle {
+  id: number;
+  position: number;
+  gapPosition: number;
+  gapSize: number;
+  passed: boolean;
+  scored: boolean;
+}
+
+interface Star {
+  id: string;
+  x: number;
+  y: number;
+  collected: boolean;
+}
+
+interface Collectible {
+  id: string;
+  type: string;
+  points: number;
+  x: number;
+  y: number;
+  collected: boolean;
+}
 
 // Wrapper component that provides the voice context
 export default function VoiceFlyerGame() {
@@ -28,6 +54,7 @@ function VoiceFlyerGameContent() {
   const { status, isMuted, unmute, mute, micFft, connect } = useVoice();
   const [score, setScore] = useState(0);
   const [bestScore, setBestScore] = useState(0);
+  const [timeRemaining, setTimeRemaining] = useState(30); // 30 seconds game duration
   const [gameActive, setGameActive] = useState(false);
   const [sensitivity, setSensitivity] = useState<number>(25); // Default sensitivity
   const [noiseFloor, setNoiseFloor] = useState<number>(0);
@@ -35,12 +62,43 @@ function VoiceFlyerGameContent() {
   const [ballPosition, setBallPosition] = useState<number>(50);
   const [currentDecibel, setCurrentDecibel] = useState<number>(0);
   const [targetDecibel, setTargetDecibel] = useState(50); // Medium level target
-  const [timeRemaining, setTimeRemaining] = useState(30); // 30 second countdown
+  const [collectibles, setCollectibles] = useState<Array<Collectible>>([]);
+  const [stars, setStars] = useState<Array<Star>>([]);
+  const [powerUps, setPowerUps] = useState<Array<{id: string, type: string, x: number, y: number, collected: boolean}>>([]);
+  const [particles, setParticles] = useState<Array<{id: string, x: number, y: number, color: string, size: number, speed: number, angle: number, life: number}>>([]);
+  const [activePowerUp, setActivePowerUp] = useState<string | null>(null);
+  const [powerUpTimeRemaining, setPowerUpTimeRemaining] = useState(0);
+  const [showTutorial, setShowTutorial] = useState(true);
+  const [tutorialStep, setTutorialStep] = useState(1);
+  const [voiceStrength, setVoiceStrength] = useState(0);
+  const [voiceHistory, setVoiceHistory] = useState<Array<number>>([]);
+  const [patientData, setPatientData] = useState<{
+    sessionDate: string,
+    averageVoiceStrength: number,
+    voiceStability: number,
+    itemsCollected: number,
+    sessionDuration: number
+  }>({
+    sessionDate: new Date().toISOString(),
+    averageVoiceStrength: 0,
+    voiceStability: 0,
+    itemsCollected: 0,
+    sessionDuration: 30
+  });
   const [isMobile, setIsMobile] = useState(false);
   const [useNativeMic, setUseNativeMic] = useState(false);
   const [micPermissionGranted, setMicPermissionGranted] = useState(false);
   const [connectionAttempts, setConnectionAttempts] = useState(0);
-  const [obstacles, setObstacles] = useState<Array<{id: number, position: number, passed: boolean}>>([]);
+  const [deviceType, setDeviceType] = useState<string>('unknown');
+  const [microphoneType, setMicrophoneType] = useState<string>('hume');
+  const [gameData, setGameData] = useState<any>({});
+  const [isSavingData, setIsSavingData] = useState<boolean>(false);
+  const [level, setLevel] = useState(1);
+  const [combo, setCombo] = useState(0);
+  const [showComboText, setShowComboText] = useState(false);
+  const [comboText, setComboText] = useState('');
+  const [gameSpeed, setGameSpeed] = useState(3);
+  const [isCalibrated, setIsCalibrated] = useState(false);
   
   const gameLoopRef = useRef<NodeJS.Timeout | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -55,12 +113,159 @@ function VoiceFlyerGameContent() {
   const animationFrameRef = useRef<number | null>(null);
   const ballAnimationRef = useRef<number | null>(null);
   
-  // Check browser compatibility
+  // Game canvas styles
+  const gameCanvasStyle = {
+    background: 'linear-gradient(180deg, #e0f7ff 0%, #87CEFA 100%)',
+    position: 'relative' as const,
+    overflow: 'hidden',
+    borderRadius: '12px',
+    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
+    border: '2px solid #4a90e2'
+  };
+
+  // Ball styles with improved visuals
+  const ballStyle = {
+    width: '40px',
+    height: '40px',
+    borderRadius: '50%',
+    background: 'radial-gradient(circle at 30% 30%, #ff6b6b, #c62828)',
+    boxShadow: '0 4px 8px rgba(0, 0, 0, 0.2), inset 2px 2px 4px rgba(255, 255, 255, 0.5)',
+    position: 'absolute' as const,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    transition: 'top 0.3s cubic-bezier(0.25, 0.1, 0.25, 1)', // Smoother transition
+    zIndex: 10
+  };
+
+  // Collectible item styles
+  const collectibleStyle = {
+    position: 'absolute' as const,
+    width: '30px',
+    height: '30px',
+    borderRadius: '50%',
+    background: 'radial-gradient(circle at 30% 30%, #81c784, #388e3c)',
+    boxShadow: '0 0 10px #4caf50',
+    animation: 'pulse 1.2s infinite ease-in-out, float 3s infinite ease-in-out',
+    zIndex: 5
+  };
+
+  // Star styles for points collected
+  const starStyle = {
+    position: 'absolute' as const,
+    width: '30px',
+    height: '30px',
+    color: '#FFD700',
+    zIndex: 5
+  };
+
+  // Power-up styles
+  const powerUpStyle = {
+    position: 'absolute' as const,
+    width: '30px',
+    height: '30px',
+    borderRadius: '50%',
+    background: 'radial-gradient(circle at 30% 30%, #4fc3f7, #0288d1)',
+    boxShadow: '0 0 15px #29b6f6',
+    animation: 'pulse 1s infinite ease-in-out, float 3s infinite ease-in-out',
+    zIndex: 5
+  };
+
+  // Add global CSS for animations
+  const globalStyles = `
+    @keyframes float {
+      0% { transform: translateY(0px); }
+      50% { transform: translateY(-10px); }
+      100% { transform: translateY(0px); }
+    }
+    
+    @keyframes pulse {
+      0% { transform: scale(1); }
+      50% { transform: scale(1.1); }
+      100% { transform: scale(1); }
+    }
+    
+    @keyframes fadeUp {
+      0% { opacity: 0; transform: translate(-50%, 0%); }
+      20% { opacity: 1; transform: translate(-50%, -50%); }
+      80% { opacity: 1; transform: translate(-50%, -50%); }
+      100% { opacity: 0; transform: translate(-50%, -100%); }
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    @keyframes shimmer {
+      0% { background-position: -200% 0; }
+      100% { background-position: 200% 0; }
+    }
+  `;
+
+  // Cloud styles for background decoration
+  const cloudStyle = (top: number, left: number, scale: number, opacity: number) => ({
+    position: 'absolute' as const,
+    top: `${top}%`,
+    left: `${left}%`,
+    width: `${scale * 100}px`,
+    height: `${scale * 60}px`,
+    background: 'rgba(255, 255, 255, 0.8)',
+    borderRadius: '50px',
+    boxShadow: '0 4px 8px rgba(255, 255, 255, 0.3)',
+    opacity,
+    zIndex: 1
+  });
+
+  // Create particle effect
+  const createParticles = (x: number, y: number, count: number) => {
+    const newParticles: Array<{id: string, x: number, y: number, color: string, size: number, speed: number, angle: number, life: number}> = [];
+    
+    for (let i = 0; i < count; i++) {
+      newParticles.push({
+        id: `particle-${Date.now()}-${i}`,
+        x,
+        y,
+        color: `hsl(${Math.random() * 360}, 100%, 70%)`,
+        size: Math.random() * 5 + 2,
+        speed: Math.random() * 2 + 1,
+        angle: Math.random() * Math.PI * 2,
+        life: 100
+      });
+    }
+    
+    setParticles(prev => [...prev, ...newParticles]);
+  };
+
+  // Update particles
+  useEffect(() => {
+    if (!gameActive || particles.length === 0) return;
+    
+    const updateParticles = () => {
+      setParticles(prev => 
+        prev
+          .map(particle => ({
+            ...particle,
+            x: particle.x + Math.cos(particle.angle) * particle.speed,
+            y: particle.y + Math.sin(particle.angle) * particle.speed,
+            life: particle.life - 2
+          }))
+          .filter(particle => particle.life > 0)
+      );
+    };
+    
+    const particleLoop = setInterval(updateParticles, 50);
+    return () => clearInterval(particleLoop);
+  }, [gameActive, particles]);
+
+  // Check browser compatibility for audio features
   const checkBrowserCompatibility = () => {
     const compatibility = {
       audioContext: !!(window.AudioContext || (window as any).webkitAudioContext),
       getUserMedia: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
+      audioWorklet: !!(window.AudioContext && (window as any).AudioWorklet)
     };
+    
+    console.log("Browser compatibility check:", compatibility);
     
     return {
       isCompatible: compatibility.audioContext && compatibility.getUserMedia,
@@ -68,43 +273,130 @@ function VoiceFlyerGameContent() {
     };
   };
   
+  // Detect device type for better compatibility handling
+  useEffect(() => {
+    const detectDevice = () => {
+      const ua = navigator.userAgent;
+      
+      // Check for iOS devices
+      const isIOS = /iPad|iPhone|iPod/.test(ua) && !(window as any).MSStream;
+      
+      // Check for Mac devices
+      const isMac = /Mac/.test(ua) && !isIOS;
+      
+      // Check for Safari browser
+      const isSafari = /Safari/.test(ua) && !/Chrome/.test(ua);
+      
+      let detectedType = 'unknown';
+      
+      if (isIOS) {
+        detectedType = isSafari ? 'iOS Safari' : 'iOS';
+      } else if (isMac) {
+        detectedType = isSafari ? 'Mac Safari' : 'Mac';
+      } else if (/Android/.test(ua)) {
+        detectedType = 'Android';
+      } else if (/Windows/.test(ua)) {
+        detectedType = 'Windows';
+      } else if (/Linux/.test(ua)) {
+        detectedType = 'Linux';
+      }
+      
+      console.log(`Device detected: ${detectedType}`);
+      setDeviceType(detectedType);
+      
+      // Apply device-specific settings
+      if (isIOS || isSafari) {
+        // iOS/Safari needs higher sensitivity and special handling
+        setSensitivity(35);
+        
+        // Add touchstart listener for iOS audio initialization
+        document.addEventListener('touchstart', function iosTouchHandler() {
+          console.log("Touch event detected on iOS - initializing audio");
+          initAudioOnUserInteraction();
+          // Remove the listener after first touch to avoid multiple initializations
+          document.removeEventListener('touchstart', iosTouchHandler);
+        }, { once: true });
+        
+        console.log("Applied iOS/Safari specific settings");
+      }
+      
+      // Check browser compatibility
+      const { isCompatible, features } = checkBrowserCompatibility();
+      if (!isCompatible) {
+        console.warn("Browser may not support all required audio features");
+        
+        // Show specific message for iOS Safari
+        if (isIOS && isSafari) {
+          alert("For best experience on iOS Safari: 1) Make sure your device is not on silent mode, 2) When prompted, allow microphone access, 3) If issues persist, try using Chrome for iOS");
+        } else {
+          alert("Your browser may not fully support all audio features. For best experience, use Chrome, Firefox, or Safari.");
+        }
+      }
+    };
+    
+    detectDevice();
+  }, []);
+  
   // Detect if user is on mobile device (iPhone)
   useEffect(() => {
     const checkMobile = () => {
       const userAgent = navigator.userAgent || navigator.vendor;
       const isMobileDevice = /iPhone|iPad|iPod|Android/i.test(userAgent);
       setIsMobile(isMobileDevice);
-      
-      // Adjust sensitivity based on device
-      if (isMobileDevice) {
-        setSensitivity(35); // Higher sensitivity for mobile devices
-        
-        // iOS requires user interaction before audio can start
-        if (/iPhone|iPad|iPod/i.test(userAgent)) {
-          document.addEventListener('touchstart', initAudioOnUserInteraction, { once: true });
-        }
-      } else {
-        setSensitivity(25); // Default for desktop (Mac)
-      }
     };
     
     checkMobile();
-    
-    // Check if browser supports required audio features
-    const { isCompatible } = checkBrowserCompatibility();
-    if (!isCompatible) {
-      alert("Your browser may not fully support audio features required for this game. Please try using Chrome, Firefox, or Safari.");
-    }
   }, []);
   
-  // Initialize audio on user interaction (for iOS)
+  // Initialize audio on user interaction (required for iOS Safari)
   const initAudioOnUserInteraction = () => {
-    if (!audioContextRef.current) {
-      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-      audioContextRef.current = new AudioContext();
-      audioContextRef.current.resume().then(() => {
-        console.log("AudioContext initialized on user interaction");
-      });
+    console.log("Initializing audio on user interaction");
+    
+    try {
+      // Create audio context if it doesn't exist
+      if (!audioContextRef.current) {
+        const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+        audioContextRef.current = new AudioContext();
+        console.log("Audio context created on user interaction, state:", audioContextRef.current.state);
+      }
+      
+      // Resume audio context if suspended (critical for iOS)
+      if (audioContextRef.current.state === 'suspended') {
+        audioContextRef.current.resume().then(() => {
+          console.log("Audio context resumed successfully on user interaction");
+        }).catch(err => {
+          console.error("Failed to resume audio context:", err);
+        });
+      }
+      
+      // Create a short silent buffer and play it (required for iOS to fully activate audio)
+      const buffer = audioContextRef.current.createBuffer(1, 1, 22050);
+      const source = audioContextRef.current.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioContextRef.current.destination);
+      source.start(0);
+      console.log("Played silent buffer to activate audio system");
+      
+      // Check if we're on iOS
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+      if (isIOS) {
+        console.log("iOS device detected, using special audio initialization");
+        
+        // For iOS, we need to wait a moment before requesting microphone access
+        setTimeout(() => {
+          // Try to initialize microphone if permission not already granted
+          if (!micPermissionGranted) {
+            console.log("Attempting to initialize microphone after audio context activation");
+            initializeNativeMicrophone();
+          }
+        }, 300);
+      }
+      
+      return true;
+    } catch (error: any) {
+      console.error("Error initializing audio on user interaction:", error);
+      alert(`Error initializing audio: ${error.message || 'Unknown error'}. Please try again or use a different browser.`);
+      return false;
     }
   };
   
@@ -127,6 +419,7 @@ function VoiceFlyerGameContent() {
         // Set threshold slightly above noise floor
         setNoiseFloor(Math.max(avgNoiseFloor + 5, 5));
         setIsCalibrating(false);
+        setIsCalibrated(true);
         console.log("Microphone calibrated. Noise floor:", avgNoiseFloor);
       } else if (currentDecibel) {
         calibrationSamples.push(currentDecibel);
@@ -138,108 +431,150 @@ function VoiceFlyerGameContent() {
   
   // Initialize native microphone as fallback
   const initializeNativeMicrophone = async () => {
+    console.log("Initializing native microphone...");
+    
     try {
-      // Create audio context if not already created
-      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      // Ensure audio context is created and resumed (critical for iOS)
       if (!audioContextRef.current) {
+        const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
         audioContextRef.current = new AudioContext();
-      } else {
-        // Resume context if it was suspended
-        if (audioContextRef.current.state === 'suspended') {
-          await audioContextRef.current.resume();
-        }
+        console.log("Audio context created, state:", audioContextRef.current.state);
       }
       
-      // Get microphone stream
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: { 
+      // iOS Safari requires resuming the audio context during user interaction
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+        console.log("Audio context resumed from suspended state");
+      }
+      
+      // Request microphone access with explicit constraints for better iOS compatibility
+      const constraints = {
+        audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true
-        } 
-      });
+        }
+      };
       
-      // If there's an existing stream, stop all tracks
-      if (micStreamRef.current) {
-        micStreamRef.current.getTracks().forEach(track => track.stop());
-      }
+      console.log("Requesting microphone access with constraints:", constraints);
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       
+      // Store the stream for later cleanup
       micStreamRef.current = stream;
       
-      // Create analyser node
+      // Create and configure analyser node
       const analyser = audioContextRef.current.createAnalyser();
-      analyser.fftSize = 256;
+      analyser.fftSize = 256; // Must be power of 2
+      analyser.smoothingTimeConstant = 0.8; // Higher value = smoother transitions
       analyserRef.current = analyser;
       
       // Connect microphone to analyser
       const source = audioContextRef.current.createMediaStreamSource(stream);
       source.connect(analyser);
       
+      console.log("Microphone successfully connected to audio analyser");
+      
+      // Update state to reflect microphone access
       setMicPermissionGranted(true);
       setUseNativeMic(true);
-      console.log("Native microphone initialized successfully");
+      setMicrophoneType('native');
       
       // Start monitoring volume
       startMonitoringVolume();
       
-      // Calibrate microphone
-      calibrateMicrophone();
-      
       return true;
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error initializing native microphone:", error);
+      
+      // Specific error handling for iOS Safari
+      if (error.name === 'NotAllowedError') {
+        alert("Microphone access was denied. Please enable microphone access in your device settings and try again.");
+        
+        // Show iOS specific instructions if on iOS
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+        if (isIOS) {
+          alert("On iOS, you may need to: 1) Go to Settings > Safari > Microphone, 2) Enable microphone access for this website, 3) Return to Safari and reload the page");
+        }
+      } else if (error.name === 'NotFoundError') {
+        alert("No microphone was found on your device. Please connect a microphone and try again.");
+      } else {
+        alert(`Microphone error: ${error.message || 'Unknown error'}. Please try again or use a different browser.`);
+      }
+      
+      setMicPermissionGranted(false);
       return false;
     }
   };
   
   // Start monitoring volume using native microphone
   const startMonitoringVolume = () => {
-    if (!analyserRef.current || !useNativeMic) return;
+    if (!analyserRef.current || !useNativeMic) {
+      console.log("Cannot start monitoring: analyser not initialized or not using native mic");
+      return;
+    }
     
+    console.log("Starting volume monitoring...");
     keepMonitoringRef.current = true;
     const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
     
     const updateVolume = () => {
-      if (!analyserRef.current || !keepMonitoringRef.current) return;
-      
-      analyserRef.current.getByteFrequencyData(dataArray);
-      
-      // Calculate average volume
-      let sum = 0;
-      const samples = Math.min(16, dataArray.length);
-      for (let i = 0; i < samples; i++) {
-        sum += dataArray[i];
-      }
-      const avgVolume = sum / samples;
-      
-      // Apply noise floor
-      const adjustedVolume = Math.max(avgVolume - noiseFloor, 0);
-      
-      // Scale to 0-100 range, apply sensitivity
-      const scaledValue = Math.min(Math.max((adjustedVolume / 255) * 100 * (sensitivity / 25), 0), 100);
-      const roundedValue = Math.round(scaledValue);
-      
-      // Store in history for smoothing
-      volumeHistoryRef.current.push(roundedValue);
-      
-      // Keep only the last 5 values for a moving average
-      if (volumeHistoryRef.current.length > 5) {
-        volumeHistoryRef.current.shift();
+      if (!analyserRef.current || !keepMonitoringRef.current) {
+        console.log("Stopping volume monitoring loop");
+        return;
       }
       
-      // Calculate smoothed volume (moving average)
-      const smoothedVolume = volumeHistoryRef.current.reduce((sum, val) => sum + val, 0) / 
-                             volumeHistoryRef.current.length;
-      
-      // Update current decibel state
-      setCurrentDecibel(Math.round(smoothedVolume));
-      
-      // Update target ball position (invert: louder = higher = lower y position)
-      targetBallPositionRef.current = 100 - Math.round(smoothedVolume);
-      
-      // Log for debugging
-      if (gameActive) {
-        console.log("Volume: ", Math.round(smoothedVolume), "Target Ball Position: ", targetBallPositionRef.current);
+      try {
+        analyserRef.current.getByteFrequencyData(dataArray);
+        
+        // Calculate average volume with focus on lower frequencies (voice range)
+        let sum = 0;
+        const samples = Math.min(16, dataArray.length);
+        // Weight lower frequencies more heavily for better voice detection
+        for (let i = 0; i < samples; i++) {
+          // Apply weight factor that decreases with frequency
+          const weight = 1 - (i / samples) * 0.5;
+          sum += dataArray[i] * weight;
+        }
+        const avgVolume = sum / samples;
+        
+        // Apply noise floor
+        const adjustedVolume = Math.max(avgVolume - noiseFloor, 0);
+        
+        // Scale to 0-100 range, apply sensitivity with non-linear scaling
+        // Square root scaling gives better control at lower volumes
+        const scaledValue = Math.min(
+          Math.max(
+            Math.sqrt((adjustedVolume / 255) * 100) * (sensitivity / 15), 
+            0
+          ), 
+          100
+        );
+        const roundedValue = Math.round(scaledValue);
+        
+        // Store in history for smoothing
+        volumeHistoryRef.current.push(roundedValue);
+        
+        // Keep only the last 5 values for a moving average
+        if (volumeHistoryRef.current.length > 5) {
+          volumeHistoryRef.current.shift();
+        }
+        
+        // Calculate smoothed volume (moving average)
+        const smoothedVolume = volumeHistoryRef.current.reduce((sum, val) => sum + val, 0) / 
+                              volumeHistoryRef.current.length;
+        
+        // Update current decibel state
+        setCurrentDecibel(Math.round(smoothedVolume));
+        
+        // Update target ball position (invert: louder = higher = lower y position)
+        targetBallPositionRef.current = 100 - Math.round(smoothedVolume);
+        
+        // Log for debugging
+        if (gameActive && Math.random() < 0.05) { // Only log occasionally to reduce console spam
+          console.log("Volume:", Math.round(smoothedVolume), "Target Ball Position:", targetBallPositionRef.current);
+        }
+      } catch (error) {
+        console.error("Error in volume monitoring:", error);
       }
       
       // Continue monitoring
@@ -416,11 +751,15 @@ function VoiceFlyerGameContent() {
 
   // End the game
   const endGame = async () => {
+    console.log("Ending game...");
     setGameActive(false);
     cleanup();
     
+    // Save final game data to Supabase
+    await saveGameData();
+    
     // Reset game state
-    setObstacles([]);
+    setCollectibles([]);
     setBallPosition(50);
     targetBallPositionRef.current = 50;
     
@@ -440,7 +779,9 @@ function VoiceFlyerGameContent() {
               score, 
               user_id: session?.user?.id || null,
               user_name: session?.user?.email?.split('@')[0] || 'Anonymous',
-              difficulty: sensitivity === 15 ? 'hard' : sensitivity === 25 ? 'medium' : 'easy'
+              difficulty: sensitivity === 30 ? 'easy' : sensitivity === 25 ? 'medium' : 'hard',
+              device_type: deviceType,
+              microphone_type: microphoneType
             }
           ]);
           
@@ -455,154 +796,319 @@ function VoiceFlyerGameContent() {
     }
   };
 
-  // Game timer countdown
+  // Save game data to Supabase
+  const saveGameData = async () => {
+    if (!gameActive || isSavingData) return;
+    
+    try {
+      setIsSavingData(true);
+      console.log("Saving game data to Supabase...");
+      
+      // Prepare game data in JSONB format
+      const gameData = {
+        score,
+        ballPosition,
+        currentDecibel,
+        sensitivity,
+        difficulty: sensitivity === 30 ? 'easy' : sensitivity === 25 ? 'medium' : 'hard',
+        microphoneType,
+        deviceType,
+        timestamp: new Date().toISOString()
+      };
+      
+      // Prepare analysis data in JSONB format
+      const gameAnalysis = {
+        volumeHistory: volumeHistoryRef.current,
+        itemsCollected: collectibles.filter(c => c.collected).length,
+        averageVolume: volumeHistoryRef.current.length > 0 
+          ? volumeHistoryRef.current.reduce((a, b) => a + b, 0) / volumeHistoryRef.current.length 
+          : 0,
+        maxVolume: volumeHistoryRef.current.length > 0 
+          ? Math.max(...volumeHistoryRef.current) 
+          : 0
+      };
+      
+      // Send to API endpoint that will insert into PostgreSQL via Supabase
+      const response = await fetch('/api/save-game-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: 'anonymous', // Will be replaced with actual user_id on server if logged in
+          data: gameData,
+          analysis: gameAnalysis
+        })
+      });
+      
+      const result = await response.json();
+      
+      if (result.error) {
+        console.error("Error saving game data:", result.error);
+      } else {
+        console.log("Game data saved successfully with ID:", result.id);
+        // Update game data state for reference
+        setGameData({
+          id: result.id,
+          ...gameData,
+          analysis: gameAnalysis
+        });
+      }
+    } catch (error) {
+      console.error("Error saving game data:", error);
+    } finally {
+      setIsSavingData(false);
+    }
+  };
+
+  // Periodically save game data during gameplay
+  useEffect(() => {
+    if (gameActive) {
+      // Save data every 10 seconds during gameplay
+      const saveInterval = setInterval(() => {
+        saveGameData();
+      }, 10000);
+      
+      return () => clearInterval(saveInterval);
+    }
+  }, [gameActive]);
+
+  // Timer for game
   useEffect(() => {
     if (gameActive && timeRemaining > 0) {
       timerRef.current = setInterval(() => {
         setTimeRemaining(prev => {
-          if (prev <= 1) {
-            // Game over when timer reaches 0
+          const newTime = prev - 1;
+          if (newTime <= 0) {
+            // End game when time is up
             endGame();
             return 0;
           }
-          return prev - 1;
+          return newTime;
         });
       }, 1000);
-      
-      return () => {
-        if (timerRef.current) {
-          clearInterval(timerRef.current);
-          timerRef.current = null;
-        }
-      };
     }
+    
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    };
   }, [gameActive]);
-
-  // Game loop
+  
+  // Generate collectibles
   useEffect(() => {
-    if (gameActive) {
-      if (isMuted && !useNativeMic) {
-        unmute();
-      }
+    if (!gameActive) return;
+    
+    const generateCollectible = () => {
+      // Different types of collectibles with different point values
+      const collectibleTypes = [
+        {type: 'circle', points: 10, probability: 0.5},
+        {type: 'triangle', points: 15, probability: 0.3},
+        {type: 'diamond', points: 20, probability: 0.2}
+      ];
       
-      // For native microphone, ensure monitoring is active
-      if (useNativeMic && !animationFrameRef.current) {
-        startMonitoringVolume();
-      }
+      // Random selection based on probability
+      const rand = Math.random();
+      let selectedType = collectibleTypes[0];
+      let cumulativeProbability = 0;
       
-      // Start the game loop
-      gameLoopRef.current = setInterval(() => {
-        // Move obstacles from right to left
-        setObstacles(prev => {
-          // Move existing obstacles
-          const updatedObstacles = prev
-            .map(obs => ({
-              ...obs,
-              position: obs.position - 2, // Speed of obstacles
-            }))
-            .filter(obs => obs.position > -10); // Remove obstacles that have gone off-screen
-          
-          // Check for collisions and scoring
-          let scoreIncrement = 0;
-          updatedObstacles.forEach(obs => {
-            // If obstacle is at the ball's x-position (approx center of screen)
-            if (obs.position <= 52 && obs.position >= 48 && !obs.passed) {
-              // Mark as passed
-              obs.passed = true;
-              
-              // Check if ball is within the gap
-              const gapTop = 60; // Top of the gap
-              const gapBottom = 40; // Bottom of the gap
-              if (ballPosition >= gapBottom && ballPosition <= gapTop) {
-                // Successfully navigated through the gap
-                scoreIncrement += 10;
-              }
-            }
-          });
-          
-          // Add score if earned
-          if (scoreIncrement > 0) {
-            setScore(prev => {
-              const newScore = prev + scoreIncrement;
-              // Update best score if needed
-              if (newScore > bestScore) {
-                setBestScore(newScore);
-              }
-              return newScore;
-            });
-          }
-          
-          // Add new obstacles randomly
-          if (Math.random() < 0.02) { // 2% chance per frame to add a new obstacle
-            const newId = obstacleIdRef.current++;
-            updatedObstacles.push({
-              id: newId,
-              position: 100, // Start from the right edge
-              passed: false,
-            });
-          }
-          
-          return updatedObstacles;
-        });
-      }, 50); // 20 FPS game loop
-      
-      return () => {
-        if (gameLoopRef.current) {
-          clearInterval(gameLoopRef.current);
-          gameLoopRef.current = null;
+      for (const type of collectibleTypes) {
+        cumulativeProbability += type.probability;
+        if (rand <= cumulativeProbability) {
+          selectedType = type;
+          break;
         }
+      }
+      
+      // Random position (more likely to be in the middle area)
+      const y = Math.floor(Math.random() * 80) + 10;
+      
+      const newCollectible = {
+        id: `collectible-${Date.now()}`,
+        type: selectedType.type,
+        points: selectedType.points,
+        x: 100, // Start from right side
+        y,
+        collected: false
       };
+      
+      setCollectibles(prev => [...prev, newCollectible]);
+    };
+    
+    // Generate collectibles at intervals
+    const collectibleInterval = setInterval(generateCollectible, 1000); // Every second
+    return () => clearInterval(collectibleInterval);
+  }, [gameActive]);
+  
+  // Move collectibles and check collisions
+  useEffect(() => {
+    if (!gameActive) return;
+    
+    const moveCollectibles = () => {
+      setCollectibles(prev => {
+        return prev
+          .map(collectible => {
+            // Move collectible from right to left
+            const newX = collectible.x - 2;
+            
+            // Check if ball collected the item
+            const ballX = 50; // Ball is fixed horizontally
+            const ballY = ballPosition;
+            const collectibleCollected = 
+              !collectible.collected && 
+              Math.abs(newX - ballX) < 8 && 
+              Math.abs(collectible.y - ballY) < 8;
+            
+            // If collected, add points
+            if (collectibleCollected) {
+              // Add points (double if power-up is active)
+              const pointsToAdd = activePowerUp === 'doublePoints' ? collectible.points * 2 : collectible.points;
+              setScore(prev => prev + pointsToAdd);
+              
+              // Update patient data
+              setPatientData(prev => ({
+                ...prev,
+                itemsCollected: prev.itemsCollected + 1
+              }));
+              
+              // Show points text
+              setComboText(`+${pointsToAdd}!`);
+              setShowComboText(true);
+              setTimeout(() => setShowComboText(false), 800);
+              
+              // Create particles for effect
+              createParticles(ballX, ballY, 8);
+            }
+            
+            return {
+              ...collectible,
+              x: newX,
+              collected: collectible.collected || collectibleCollected
+            };
+          })
+          .filter(collectible => collectible.x > -10 && !collectible.collected); // Remove collectibles that are off-screen or collected
+      });
+    };
+    
+    const collectibleLoop = setInterval(moveCollectibles, 50);
+    return () => clearInterval(collectibleLoop);
+  }, [gameActive, ballPosition, activePowerUp]);
+  
+  // Process volume data for smoother ball movement
+  const processVolumeData = (volume: number) => {
+    // Add to history for smoothing
+    volumeHistoryRef.current.push(volume);
+    
+    // Keep only the last 5 values for a moving average
+    if (volumeHistoryRef.current.length > 5) {
+      volumeHistoryRef.current.shift();
     }
-  }, [gameActive, isMuted, unmute, bestScore, ballPosition, useNativeMic]);
+    
+    // Calculate moving average for smoother movement
+    const avgVolume = volumeHistoryRef.current.reduce((sum, val) => sum + val, 0) / volumeHistoryRef.current.length;
+    
+    // Update voice strength for patient data
+    setVoiceStrength(avgVolume);
+    setVoiceHistory(prev => {
+      const newHistory = [...prev, avgVolume];
+      if (newHistory.length > 30) newHistory.shift();
+      return newHistory;
+    });
+    
+    // Map volume to position with enhanced sensitivity
+    // Scale from 0-100 to 0-100 (percentage of screen height)
+    const scaledVolume = Math.min(100, avgVolume * sensitivity * 2);
+    
+    // Invert the position (louder = higher = lower percentage from top)
+    const newPosition = 100 - scaledVolume;
+    
+    // Set a target position for smoother animation
+    targetBallPositionRef.current = Math.max(5, Math.min(95, newPosition));
+  };
   
   // Start the game
   const startGame = () => {
-    setGameActive(true);
+    console.log("Starting game...");
+    
+    if (!micPermissionGranted) {
+      console.log("Microphone permission not granted, requesting access...");
+      handleGrantMicrophoneAccess();
+      
+      // Show message to user
+      alert("Please grant microphone access to play the game");
+      return;
+    }
+    
+    // Reset game state
     setScore(0);
-    setObstacles([]);
-    setTimeRemaining(30);
+    setTimeRemaining(30); // 30 seconds game duration
+    setCollectibles([]);
+    setStars([]);
+    setPowerUps([]);
+    setParticles([]);
+    setBallPosition(50);
+    targetBallPositionRef.current = 50;
     volumeHistoryRef.current = [];
+    setVoiceHistory([]);
+    setPatientData({
+      sessionDate: new Date().toISOString(),
+      averageVoiceStrength: 0,
+      voiceStability: 0,
+      itemsCollected: 0,
+      sessionDuration: 30
+    });
     
-    // For iOS, ensure audio is initialized on user interaction
-    if (isMobile) {
-      initAudioOnUserInteraction();
-    }
+    // Start the game
+    setGameActive(true);
+    setShowTutorial(false);
     
-    // Try to connect and unmute
+    // If using Hume AI voice, connect to voice service
     if (!useNativeMic) {
-      if (status.value !== "connected") {
-        connect()
-          .then(() => {
-            console.log("Voice service connected on game start");
-            unmute();
-            setMicPermissionGranted(true);
-          })
-          .catch(error => {
-            console.error("Failed to connect voice service:", error);
-            // Try native microphone as fallback
-            initializeNativeMicrophone();
-          });
-      } else {
-        unmute();
-      }
+      console.log("Using Hume AI voice service");
+      connect();
+      unmute();
     } else {
-      // If using native mic, just make sure it's initialized
-      if (!micPermissionGranted) {
-        initializeNativeMicrophone();
-      } else {
-        // Restart monitoring if it was stopped
-        startMonitoringVolume();
-      }
+      console.log("Using native microphone");
+      // Make sure we're monitoring volume
+      startMonitoringVolume();
     }
     
-    // Force a direct call to ensure monitoring starts immediately
-    setTimeout(() => {
-      if (useNativeMic) {
-        console.log("Forcing microphone monitoring to start");
-        stopMonitoringVolume(); // Stop any existing monitoring
-        startMonitoringVolume(); // Restart fresh
+    console.log("Game started successfully");
+  };
+  
+  // Enhanced start game handler with proper initialization sequence
+  const handleStartGame = () => {
+    console.log("Start Game button clicked");
+    
+    // First ensure audio context is initialized (crucial for iOS)
+    const audioInitialized = initAudioOnUserInteraction();
+    
+    // For iOS devices, we need a special sequence
+    const isIOS = deviceType.includes('iOS');
+    
+    if (isIOS) {
+      console.log("iOS device detected, using special game start sequence");
+      
+      // For iOS, we need to ensure microphone access before starting the game
+      if (!micPermissionGranted) {
+        console.log("iOS device without microphone permission, requesting access first");
+        handleGrantMicrophoneAccess();
+        
+        // Show instructions to the user
+        alert("Please grant microphone access when prompted, then press Start Game again");
+        return;
       }
-    }, 500);
+      
+      // If we already have microphone access, start the game with a delay
+      setTimeout(() => {
+        console.log("Starting game after delay for iOS");
+        startGame();
+      }, 500);
+    } else {
+      // For non-iOS devices, we can start the game with a shorter delay
+      setTimeout(() => {
+        startGame();
+      }, 200);
+    }
   };
   
   // Set difficulty which changes the target decibel level and sensitivity
@@ -661,10 +1167,27 @@ function VoiceFlyerGameContent() {
     }
   };
 
+  // Direct handler for microphone access button
+  const handleGrantMicrophoneAccess = () => {
+    console.log("Grant Microphone Access button clicked");
+    
+    // First ensure audio context is initialized (crucial for iOS)
+    const audioInitialized = initAudioOnUserInteraction();
+    
+    // For iOS devices, we need a slight delay between audio context initialization and mic access
+    const isIOS = deviceType.includes('iOS');
+    const delay = isIOS ? 500 : 100;
+    
+    setTimeout(() => {
+      console.log(`Requesting microphone access after ${delay}ms delay`);
+      initializeNativeMicrophone();
+    }, delay);
+  };
+
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center p-4">
       <header className="w-full max-w-md mb-4">
-        <h1 className="text-3xl font-bold text-center">Voice Flyer Game</h1>
+        <h1 className="text-3xl font-bold text-center">Voice Therapy Game</h1>
         <p className="text-center text-gray-600">Control the ball with your voice!</p>
       </header>
 
@@ -679,120 +1202,216 @@ function VoiceFlyerGameContent() {
       </div>
       
       <div className="w-full max-w-md bg-white rounded-lg shadow-lg overflow-hidden">
+        {/* Add global styles */}
+        <style jsx global>{globalStyles}</style>
+        
         {/* Game area */}
-        <div className="relative h-80 bg-blue-50 border-b border-gray-200">
-          {gameActive ? (
-            <>
-              {/* Game UI */}
-              <div className="absolute top-2 left-2 right-2 flex justify-between text-sm font-medium">
-                <div>Score: {score}</div>
-                <div>Time: {timeRemaining}s</div>
-                <div>Best: {bestScore}</div>
-              </div>
-              
-              {!micPermissionGranted && gameActive && (
-                <div className="mt-2 text-xs text-center text-amber-600">
-                  Waiting for microphone access...
-                  <button 
-                    onClick={() => initializeNativeMicrophone()}
-                    className="ml-2 px-2 py-1 bg-blue-500 text-white text-xs rounded"
-                  >
-                    Connect Manually
-                  </button>
-                </div>
-              )}
-              
-              {useNativeMic && (
-                <div className="mt-2 text-xs text-center text-green-600">
-                  Using device microphone directly
-                </div>
-              )}
-              
-              {isCalibrating && (
-                <div className="absolute top-10 left-0 right-0 text-xs text-center text-blue-600">
-                  Calibrating microphone...
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-              {/* Start screen */}
-              <div className="absolute inset-0 flex flex-col items-center justify-center p-4">
-                <h2 className="text-xl font-bold mb-2">Voice Flyer</h2>
-                <p className="text-sm text-center mb-4">
-                  Use your voice to control the ball! Make noise to move the ball up, be quiet to let it fall.
-                </p>
-                <button 
-                  onClick={startGame}
-                  className="px-6 py-2 bg-blue-500 text-white rounded-lg shadow hover:bg-blue-600 transition"
-                >
-                  Start Game
-                </button>
-                
-                <div className="mt-4 text-sm">
-                  <p className="font-medium mb-2">Select Difficulty:</p>
-                  <div className="flex space-x-2">
-                    <button 
-                      onClick={() => setDifficulty('easy')}
-                      className="px-3 py-1 bg-green-100 text-green-800 rounded"
-                    >
-                      Easy
-                    </button>
-                    <button 
-                      onClick={() => setDifficulty('medium')}
-                      className="px-3 py-1 bg-yellow-100 text-yellow-800 rounded"
-                    >
-                      Medium
-                    </button>
-                    <button 
-                      onClick={() => setDifficulty('hard')}
-                      className="px-3 py-1 bg-red-100 text-red-800 rounded"
-                    >
-                      Hard
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
+        <div 
+          className="w-full h-96 mb-4 relative" 
+          style={gameCanvasStyle}
+        >
+          {/* Background clouds for decoration */}
+          <div style={cloudStyle(20, 10, 1.2, 0.7)}></div>
+          <div style={cloudStyle(50, 80, 0.8, 0.5)}></div>
+          <div style={cloudStyle(70, 30, 1, 0.6)}></div>
           
-          {/* Game elements - only render when game is active */}
+          {/* Game elements only shown when game is active */}
           {gameActive && (
             <>
               {/* Ball */}
-              <motion.div 
-                className="absolute left-1/2 w-8 h-8 bg-red-500 rounded-full shadow-md"
-                style={{ 
-                  top: `${ballPosition}%`, 
-                  transform: 'translate(-50%, -50%)',
-                  zIndex: 10
+              <div 
+                style={{
+                  ...ballStyle,
+                  top: `${ballPosition}%`,
+                  boxShadow: activePowerUp === 'shield' ? '0 0 15px 5px rgba(64, 196, 255, 0.8)' : ballStyle.boxShadow
                 }}
-                transition={{ type: "spring", stiffness: 300, damping: 20 }}
-              />
+              ></div>
               
-              {/* Obstacles */}
-              {obstacles.map(obstacle => (
-                <div key={obstacle.id} className="absolute top-0 bottom-0" style={{ left: `${obstacle.position}%`, width: '10px' }}>
-                  {/* Top part of obstacle */}
-                  <div className="absolute top-0 w-full bg-gray-700" style={{ height: '40%' }}></div>
-                  {/* Bottom part of obstacle */}
-                  <div className="absolute bottom-0 w-full bg-gray-700" style={{ height: '40%' }}></div>
+              {/* Collectible items */}
+              {collectibles.map(collectible => (
+                <div 
+                  key={collectible.id}
+                  style={{
+                    ...collectibleStyle,
+                    left: `${collectible.x}%`,
+                    top: `${collectible.y}%`,
+                    background: 
+                      collectible.type === 'circle' ? 'radial-gradient(circle at 30% 30%, #81c784, #388e3c)' :
+                      collectible.type === 'triangle' ? 'radial-gradient(circle at 30% 30%, #4fc3f7, #0288d1)' :
+                      'radial-gradient(circle at 30% 30%, #ce93d8, #8e24aa)'
+                  }}
+                >
+                  {collectible.type === 'circle' ? '●' : 
+                   collectible.type === 'triangle' ? '▲' : '◆'}
                 </div>
               ))}
               
-              {/* Volume visualization */}
-              <div className="absolute bottom-2 left-2 right-2 h-4 bg-gray-200 rounded overflow-hidden">
+              {/* Stars for bonus points */}
+              {stars.map(star => (
                 <div 
-                  className="h-full bg-gradient-to-r from-blue-500 to-purple-500"
-                  style={{ width: `${currentDecibel}%` }}
+                  key={star.id}
+                  style={{
+                    ...starStyle,
+                    left: `${star.x}%`,
+                    top: `${star.y}%`,
+                    animation: 'pulse 1.5s infinite ease-in-out'
+                  }}
+                >
+                  ⭐
+                </div>
+              ))}
+              
+              {/* Power-ups */}
+              {powerUps.map(powerUp => (
+                <div 
+                  key={powerUp.id}
+                  style={{
+                    ...powerUpStyle,
+                    left: `${powerUp.x}%`,
+                    top: `${powerUp.y}%`,
+                    background: powerUp.type === 'shield' ? 'radial-gradient(circle at 30% 30%, #4fc3f7, #0288d1)' :
+                              powerUp.type === 'slowTime' ? 'radial-gradient(circle at 30% 30%, #9575cd, #5e35b1)' :
+                              'radial-gradient(circle at 30% 30%, #ffee58, #fdd835)'
+                  }}
+                >
+                  {powerUp.type === 'shield' ? '🛡️' : 
+                   powerUp.type === 'slowTime' ? '⏱️' : '2x'}
+                </div>
+              ))}
+              
+              {/* Particles */}
+              {particles.map(particle => (
+                <div
+                  key={particle.id}
+                  style={{
+                    position: 'absolute',
+                    left: `${particle.x}%`,
+                    top: `${particle.y}%`,
+                    width: `${particle.size}px`,
+                    height: `${particle.size}px`,
+                    borderRadius: '50%',
+                    backgroundColor: particle.color,
+                    opacity: particle.life / 100,
+                    zIndex: 15
+                  }}
+                ></div>
+              ))}
+              
+              {/* Combo text animation */}
+              {showComboText && (
+                <div 
+                  className="absolute text-2xl font-bold text-yellow-500"
+                  style={{
+                    top: '40%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    animation: 'fadeUp 1s forwards',
+                    zIndex: 20,
+                    textShadow: '0 0 5px rgba(0,0,0,0.5)'
+                  }}
+                >
+                  {comboText}
+                </div>
+              )}
+              
+              {/* Active power-up indicator */}
+              {activePowerUp && (
+                <div className="absolute top-2 left-2 bg-blue-600 text-white px-3 py-1 rounded-full text-sm font-bold flex items-center">
+                  {activePowerUp === 'shield' ? '🛡️ Shield' : 
+                   activePowerUp === 'slowTime' ? '⏱️ Slow Motion' : 
+                   '2x Points'}
+                  <span className="ml-2">{powerUpTimeRemaining}s</span>
+                </div>
+              )}
+              
+              {/* Voice strength meter */}
+              <div className="absolute bottom-2 left-2 right-2 h-3 bg-gray-200 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-300 ease-out"
+                  style={{ width: `${Math.min(100, voiceStrength * sensitivity * 2)}%` }}
                 ></div>
               </div>
             </>
           )}
+          
+          {/* Game start overlay */}
+          {!gameActive && !showTutorial && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-50 text-white p-4 rounded-lg">
+              <h2 className="text-2xl font-bold mb-4">Voice Therapy Game</h2>
+              <p className="text-center mb-4">
+                Use your voice to control the ball! Make noise to move the ball up, be quiet to let it fall.
+                Collect items to score points in this 30-second exercise.
+              </p>
+              <button 
+                onClick={handleStartGame}
+                className="px-6 py-2 bg-blue-500 text-white rounded-lg shadow hover:bg-blue-600 transition"
+              >
+                Start Exercise
+              </button>
+            </div>
+          )}
+          
+          {/* Tutorial overlay */}
+          {showTutorial && !gameActive && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-70 text-white p-4 rounded-lg">
+              <h2 className="text-2xl font-bold mb-4">Voice Therapy Exercise</h2>
+              
+              {tutorialStep === 1 && (
+                <>
+                  <div className="flex items-center mb-4">
+                    <div className="w-12 h-12 rounded-full bg-red-500 mr-4"></div>
+                    <p>Control the ball with your voice! Make noise to move up, be quiet to fall down. This exercise helps track your voice control progress.</p>
+                  </div>
+                  <button 
+                    onClick={() => setTutorialStep(2)}
+                    className="px-6 py-2 bg-blue-500 text-white rounded-lg shadow hover:bg-blue-600 transition mt-4"
+                  >
+                    Next
+                  </button>
+                </>
+              )}
+              
+              {tutorialStep === 2 && (
+                <>
+                  <div className="flex items-center mb-4">
+                    <div className="w-12 h-12 flex justify-center items-center text-2xl mr-4">●</div>
+                    <p>Collect items by guiding the ball to them. Different shapes have different point values.</p>
+                  </div>
+                  <button 
+                    onClick={() => setTutorialStep(3)}
+                    className="px-6 py-2 bg-blue-500 text-white rounded-lg shadow hover:bg-blue-600 transition mt-4"
+                  >
+                    Next
+                  </button>
+                </>
+              )}
+              
+              {tutorialStep === 3 && (
+                <>
+                  <div className="flex items-center mb-4">
+                    <div className="w-12 h-12 flex justify-center items-center text-2xl mr-4">📊</div>
+                    <p>Your voice strength and stability are measured during the 30-second exercise. This data helps track your progress over time.</p>
+                  </div>
+                  <button 
+                    onClick={() => {setShowTutorial(false); handleStartGame();}}
+                    className="px-6 py-2 bg-green-500 text-white rounded-lg shadow hover:bg-green-600 transition mt-4"
+                  >
+                    Start Exercise
+                  </button>
+                </>
+              )}
+            </div>
+          )}
         </div>
         
-        {/* Controls and info */}
-        <div className="p-4">
+        {/* Game stats and controls */}
+        <div className="bg-white p-4 rounded-lg shadow">
+          <div className="flex justify-between items-center mb-4">
+            <div className="text-lg font-bold">Score: {score}</div>
+            <div className="text-lg">Time: {timeRemaining}s</div>
+            <div className="text-lg font-bold">Best: {bestScore}</div>
+          </div>
+          
           {/* Volume level */}
           <div className="mb-4">
             <h3 className="font-medium mb-1">Voice Volume:</h3>
@@ -830,7 +1449,7 @@ function VoiceFlyerGameContent() {
             <div className="mt-4 p-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
               <p>Microphone access is required to play this game.</p>
               <button 
-                onClick={() => initializeNativeMicrophone()}
+                onClick={handleGrantMicrophoneAccess}
                 className="mt-2 w-full px-3 py-1.5 bg-red-600 text-white rounded"
               >
                 Grant Microphone Access
