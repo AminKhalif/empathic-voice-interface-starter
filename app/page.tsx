@@ -1,9 +1,15 @@
-import dynamic from "next/dynamic";
-
-const HomePage = dynamic(() => import("@/components/HomePage"), {
-  ssr: true,
-});
+import HomePage from "@/components/HomePage";
+import BottomNav from '@/components/BottomNav';
 
 export default function Page() {
-  return <HomePage />;
+  return (
+    <div className="flex flex-col min-h-screen">
+      <div className="grow">
+        <HomePage />
+      </div>
+      
+      {/* Bottom Navigation */}
+      <BottomNav />
+    </div>
+  );
 }

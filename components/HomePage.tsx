@@ -102,23 +102,28 @@ const HomePage = () => {
         </div>
 
         {/* Functional Phrases */}
-        <div className="border rounded-lg p-4 flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <div className="bg-orange-100 p-3 rounded-lg">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="10"></circle>
-                <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
-                <line x1="9" x2="9.01" y1="9" y2="9"></line>
-                <line x1="15" x2="15.01" y1="9" y2="9"></line>
-              </svg>
+        <Link href="/expression-game">
+          <div className="border border-yellow-200 bg-yellow-50 rounded-lg p-4 flex justify-between items-center">
+            <div className="flex items-center gap-4">
+              <div className="bg-yellow-100 p-3 rounded-lg">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+                  <line x1="9" x2="9.01" y1="9" y2="9"></line>
+                  <line x1="15" x2="15.01" y1="9" y2="9"></line>
+                </svg>
+              </div>
+              <div>
+                <div className="flex items-center">
+                  <h4 className="font-bold mr-2">Joy Expression Game</h4>
+                  <span className="text-xs bg-yellow-600 text-white px-2 py-1 rounded">NEW!</span>
+                </div>
+                <p className="text-sm text-gray-600">Maintain a joyful expression for 30 seconds</p>
+              </div>
             </div>
-            <div>
-              <h4 className="font-bold">Functional Phrases</h4>
-              <p className="text-sm text-gray-600">Practice everyday speaking</p>
-            </div>
+            <span className="text-gray-600 font-bold">0</span>
           </div>
-          <span className="text-gray-600 font-bold">0</span>
-        </div>
+        </Link>
       </div>
 
       {/* Bottom Navigation */}
