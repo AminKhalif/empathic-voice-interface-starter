@@ -38,6 +38,14 @@ export default function SimpleExpressionGame({ accessToken }: SimpleExpressionGa
     async function setupCamera() {
       try {
         console.log("Setting up camera...");
+        
+        // Add a timeout to prevent infinite loading
+        const cameraTimeout = setTimeout(() => {
+          console.log("Camera loading timed out, using fallback mode");
+          setCameraReady(true);
+          setJoyScore(0.7);
+        }, 10000); // 10-second timeout
+        
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { 
             facingMode: "user",
@@ -48,16 +56,49 @@ export default function SimpleExpressionGame({ accessToken }: SimpleExpressionGa
         
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
+          
+          // Make sure to play the video
+          try {
+            await videoRef.current.play();
+            console.log("Video started playing");
+          } catch (playError) {
+            console.error("Error playing video:", playError);
+          }
+          
           videoRef.current.onloadedmetadata = () => {
             console.log("Video metadata loaded");
+            clearTimeout(cameraTimeout);
             setCameraReady(true);
           };
+          
+          // Add a canplay event listener as a backup
+          videoRef.current.oncanplay = () => {
+            console.log("Video can play");
+            clearTimeout(cameraTimeout);
+            setCameraReady(true);
+          };
+        } else {
+          console.error("Video reference is null");
+          clearTimeout(cameraTimeout);
+          setCameraReady(true);
+          setJoyScore(0.7);
         }
       } catch (error) {
         console.error("Error setting up camera:", error);
         // Default to a fallback state that allows the game to be played
         setCameraReady(true);
         setJoyScore(0.7);
+        
+        // Log specific error messages to help debugging
+        if (error instanceof DOMException) {
+          if (error.name === 'NotAllowedError') {
+            console.error("Camera access denied by user or browser settings");
+          } else if (error.name === 'NotFoundError') {
+            console.error("No camera found on this device");
+          } else if (error.name === 'NotReadableError') {
+            console.error("Camera is already in use by another application");
+          }
+        }
       }
     }
     
